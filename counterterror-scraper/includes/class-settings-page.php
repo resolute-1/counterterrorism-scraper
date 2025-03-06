@@ -3,6 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 class Settings_Page {
     private $options;
+    private $plugin_slug = 'counterterror-scraper';
 
     public function __construct() {
         add_action('admin_menu', array($this, 'add_plugin_page'));
@@ -10,11 +11,12 @@ class Settings_Page {
     }
 
     public function add_plugin_page() {
+        // Only add the main menu page, not an options page
         add_menu_page(
             'CounterTerror Scraper',           // Page title
             'CT Scraper',                      // Menu title
             'manage_options',                  // Capability
-            'counterterror-scraper',           // Menu slug
+            $this->plugin_slug,               // Menu slug
             array($this, 'create_admin_page'), // Callback function
             'dashicons-rss',                   // Icon
             30                                 // Position
@@ -27,7 +29,11 @@ class Settings_Page {
         }
         ?>
         <div class="wrap">
-            <h2>Counterterror Scraper Settings</h2>
+            <h1>CounterTerror Scraper Settings</h1>
+            <div class="actions" style="margin-bottom: 20px;">
+                <button id="test-feeds" class="button">Test Feeds</button>
+                <button id="fetch-articles" class="button-primary">Fetch Articles Now</button>
+            </div>
             <form method="post" action="options.php">
                 <?php
                 settings_fields('counterterror_scraper_settings');
@@ -35,10 +41,6 @@ class Settings_Page {
                 submit_button();
                 ?>
             </form>
-            <div class="actions">
-                <button id="test-feeds" class="button">Test Feeds</button>
-                <button id="fetch-articles" class="button-primary">Fetch Articles Now</button>
-            </div>
         </div>
         <?php
     }
