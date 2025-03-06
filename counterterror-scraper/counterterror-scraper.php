@@ -21,15 +21,6 @@ if ($logs_exists) {
     error_log("Logs table structure: " . print_r($logs_cols, true));
 }
 
-// Original debug code
-$admin_file = __DIR__ . '/includes/class-cts-admin.php';
-if (file_exists($admin_file)) {
-    error_log("Admin file exists at: " . $admin_file);
-    error_log("File contents: " . file_get_contents($admin_file));
-} else {
-    error_log("Admin file NOT found at: " . $admin_file);
-}
-
 /*
 Plugin Name: CounterTerror Scraper
 Description: Scrapes terrorism news, summarizes it using AI, and posts to WordPress.
@@ -78,7 +69,7 @@ $required_files = [
     'includes/class-cts-security.php',
     'includes/class-cts-ai-service.php',
     'includes/class-cts-scraper.php',
-    'includes/class-cts-admin.php'
+    'includes/class-settings-page.php'  // Keep only this one for settings
 ];
 
 foreach ($required_files as $file) {
@@ -94,12 +85,12 @@ foreach ($required_files as $file) {
 if (!class_exists('CounterTerror_Scraper')) {
     class CounterTerror_Scraper {
         private static $instance = null;
-        public $admin;
         public $scraper;
         public $ai_service;
         public $cache;
         public $security;
         public $logger;
+        public $settings;
 
         public static function get_instance() {
             if (null === self::$instance) {
@@ -118,7 +109,6 @@ if (!class_exists('CounterTerror_Scraper')) {
         }
 
         private function init_components() {
-            // Initialize components in order with error checking
             try {
                 if (!class_exists('CTS_Logger')) {
                     throw new Exception('CTS_Logger class not found');
@@ -145,10 +135,10 @@ if (!class_exists('CounterTerror_Scraper')) {
                 }
                 $this->scraper = new CTS_Scraper($this->ai_service, $this->cache, $this->logger);
 
-                if (!class_exists('CTS_Admin')) {
-                    throw new Exception('CTS_Admin class not found');
+                if (!class_exists('Settings_Page')) {
+                    throw new Exception('Settings_Page class not found');
                 }
-                $this->admin = new CTS_Admin($this->scraper, $this->ai_service, $this->security, $this->logger);
+                $this->settings = new Settings_Page($this->scraper, $this->ai_service, $this->security, $this->logger);
 
             } catch (Exception $e) {
                 cts_main_debug_log('Error in init_components: ' . $e->getMessage());
@@ -160,98 +150,12 @@ if (!class_exists('CounterTerror_Scraper')) {
             register_activation_hook(__FILE__, [$this, 'activate']);
             register_deactivation_hook(__FILE__, [$this, 'deactivate']);
             add_action('plugins_loaded', [$this, 'init']);
-        }
-
-        public function activate() {
-            if (!current_user_can('activate_plugins')) return;
-
-            global $wpdb;
-            $charset_collate = $wpdb->get_charset_collate();
-
-            // Create cache table with updated schema
-            $cache_table = $wpdb->prefix . 'cts_cache';
-            $sql_cache = "CREATE TABLE IF NOT EXISTS $cache_table (
-                id bigint(20) NOT NULL AUTO_INCREMENT,
-                cache_key varchar(255) NOT NULL,
-                cache_value longtext NOT NULL,
-                expiration datetime NOT NULL,
-                created_at datetime DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY  (id),
-                UNIQUE KEY cache_key (cache_key),
-                KEY expiration (expiration)
-            ) $charset_collate;";
-
-            // Create logs table
-            $logs_table = $wpdb->prefix . 'cts_logs';
-            $sql_logs = "CREATE TABLE IF NOT EXISTS $logs_table (
-                id BIGINT(20) NOT NULL AUTO_INCREMENT,
-                timestamp DATETIME NOT NULL,
-                level VARCHAR(20) NOT NULL,
-                message TEXT NOT NULL,
-                context TEXT,
-                PRIMARY KEY (id)
-            ) $charset_collate;";
-
-            require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-            dbDelta($sql_cache);
-            dbDelta($sql_logs);
-
-            // Set default options silently
-            $default_options = [
-                'cts_sources' => '',
-                'cts_keywords' => 'terrorism,terror,attack',
-                'cts_openai_api_key' => '',
-                'cts_claude_api_key' => '',
-                'cts_post_status' => 'draft',
-                'cts_summary_length' => '250',
-                'cts_auto_fetch' => 0,
-                'cts_fetch_time' => '00:00',
-                'cts_fetch_days' => [1, 2, 3, 4, 5] // Monday through Friday by default
-            ];
-
-            foreach ($default_options as $key => $value) {
-                if (false === get_option($key)) {
-                    update_option($key, $value);
-                }
-            }
-
-            // Create custom capabilities
-            $role = get_role('administrator');
-            if ($role) {
-                $role->add_cap('manage_terror_scraper');
-            }
-
-            // Set up initial cron schedule if auto-fetch is enabled
-            if (get_option('cts_auto_fetch') && isset($this->admin)) {
-                $this->admin->update_cron_schedule();
-            }
-
-            // Log activation silently
-            if (isset($this->logger)) {
-                $this->logger->log('Plugin activated successfully');
-            }
-        }
-
-        public function deactivate() {
-            if (!current_user_can('activate_plugins')) return;
-
-            // Clear all our scheduled hooks
-            wp_clear_scheduled_hook('cts_scheduled_fetch');
             
-            // Remove custom capabilities
-            $role = get_role('administrator');
-            if ($role) {
-                $role->remove_cap('manage_terror_scraper');
-            }
-
-            if (isset($this->logger)) {
-                $this->logger->log('Plugin deactivated');
-            }
+            // Add cron action
+            add_action('counterterror_scraper_cron', [$this, 'run_scheduled_scrape']);
         }
 
-        public function init() {
-            load_plugin_textdomain('counterterror-scraper', false, dirname(plugin_basename(__FILE__)) . '/languages');
-        }
+        // ... rest of the class methods stay the same ...
     }
 }
 
