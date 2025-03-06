@@ -1,4 +1,5 @@
 <?php
+if (!defined('ABSPATH')) exit;
 
 class Settings_Page {
     private $options;
@@ -9,16 +10,21 @@ class Settings_Page {
     }
 
     public function add_plugin_page() {
-        add_options_page(
-            'Counterterror Scraper Settings',
-            'Counterterror Scraper',
-            'manage_options',
-            'counterterror-scraper',
-            array($this, 'create_admin_page')
+        add_menu_page(
+            'CounterTerror Scraper',           // Page title
+            'CT Scraper',                      // Menu title
+            'manage_options',                  // Capability
+            'counterterror-scraper',           // Menu slug
+            array($this, 'create_admin_page'), // Callback function
+            'dashicons-rss',                   // Icon
+            30                                 // Position
         );
     }
 
     public function create_admin_page() {
+        if (!current_user_can('manage_options')) {
+            wp_die(__('Sorry, you do not have sufficient permissions to access this page.'));
+        }
         ?>
         <div class="wrap">
             <h2>Counterterror Scraper Settings</h2>
@@ -29,15 +35,21 @@ class Settings_Page {
                 submit_button();
                 ?>
             </form>
+            <div class="actions">
+                <button id="test-feeds" class="button">Test Feeds</button>
+                <button id="fetch-articles" class="button-primary">Fetch Articles Now</button>
+            </div>
         </div>
         <?php
     }
 
     public function register_settings() {
-        register_setting('counterterror_scraper_settings', 'cts_rss_feeds');
+        // Register settings
+        register_setting('counterterror_scraper_settings', 'cts_sources');
         register_setting('counterterror_scraper_settings', 'cts_keywords');
-        register_setting('counterterror_scraper_settings', 'cts_openai_key');
-        register_setting('counterterror_scraper_settings', 'cts_summary_length');
+        register_setting('counterterror_scraper_settings', 'cts_openai_api_key');
+        register_setting('counterterror_scraper_settings', 'cts_claude_api_key');
+        register_setting('counterterror_scraper_settings', 'cts_summary_length', array($this, 'sanitize_summary_length'));
         register_setting('counterterror_scraper_settings', 'cts_schedule_days');
         register_setting('counterterror_scraper_settings', 'cts_schedule_time');
         
@@ -59,7 +71,7 @@ class Settings_Page {
 
         // Add fields
         add_settings_field(
-            'cts_rss_feeds',
+            'cts_sources',
             'RSS Feed URLs',
             array($this, 'rss_feeds_callback'),
             'counterterror_scraper_settings',
@@ -75,9 +87,17 @@ class Settings_Page {
         );
 
         add_settings_field(
-            'cts_openai_key',
+            'cts_openai_api_key',
             'OpenAI API Key',
             array($this, 'openai_key_callback'),
+            'counterterror_scraper_settings',
+            'cts_general_section'
+        );
+
+        add_settings_field(
+            'cts_claude_api_key',
+            'Claude API Key',
+            array($this, 'claude_key_callback'),
             'counterterror_scraper_settings',
             'cts_general_section'
         );
@@ -107,6 +127,13 @@ class Settings_Page {
         );
     }
 
+    public function sanitize_summary_length($length) {
+        $length = intval($length);
+        if ($length < 100) return 100;  // Minimum 100 words
+        if ($length > 700) return 700;  // Maximum 700 words
+        return $length;
+    }
+
     public function general_section_callback() {
         echo '<p>Configure your scraper settings</p>';
     }
@@ -116,20 +143,27 @@ class Settings_Page {
     }
 
     public function rss_feeds_callback() {
-        $feeds = get_option('cts_rss_feeds', '');
-        echo "<textarea name='cts_rss_feeds' rows='5' cols='50'>" . esc_textarea($feeds) . "</textarea>";
+        $feeds = get_option('cts_sources', '');
+        echo "<textarea name='cts_sources' rows='5' cols='50'>" . esc_textarea($feeds) . "</textarea>";
         echo "<p class='description'>Enter one RSS feed URL per line</p>";
     }
 
     public function keywords_callback() {
         $keywords = get_option('cts_keywords', '');
         echo "<textarea name='cts_keywords' rows='5' cols='50'>" . esc_textarea($keywords) . "</textarea>";
-        echo "<p class='description'>Enter one keyword per line</p>";
+        echo "<p class='description'>Enter keywords separated by commas</p>";
     }
 
     public function openai_key_callback() {
-        $key = get_option('cts_openai_key', '');
-        echo "<input type='text' name='cts_openai_key' value='" . esc_attr($key) . "' size='50'>";
+        $key = get_option('cts_openai_api_key', '');
+        echo "<input type='password' name='cts_openai_api_key' value='" . esc_attr($key) . "' size='50'>";
+        echo "<button type='button' class='button test-ai' data-service='openai'>Test OpenAI Connection</button>";
+    }
+
+    public function claude_key_callback() {
+        $key = get_option('cts_claude_api_key', '');
+        echo "<input type='password' name='cts_claude_api_key' value='" . esc_attr($key) . "' size='50'>";
+        echo "<button type='button' class='button test-ai' data-service='claude'>Test Claude Connection</button>";
     }
 
     public function summary_length_callback() {
