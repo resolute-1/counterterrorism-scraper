@@ -15,9 +15,7 @@ class CTS_Admin {
         $this->security = $security;
         $this->logger = $logger;
 
-        // Add menu and settings with higher priority
-        add_action('admin_menu', array($this, 'add_admin_menu_page'), 9);
-        add_action('admin_init', array($this, 'register_settings'));
+        // Remove the menu and settings registration since it's handled by Settings_Page
         add_action('admin_enqueue_scripts', array($this, 'enqueue_assets'));
 
         // Add AJAX handlers
@@ -31,48 +29,6 @@ class CTS_Admin {
         // Add settings update handler
         add_action('update_option_cts_auto_fetch', array($this, 'update_cron_schedule'));
         add_action('update_option_cts_fetch_frequency', array($this, 'update_cron_schedule'));
-    }
-
-    public function add_admin_menu_page() {
-        add_menu_page(
-            'CounterTerror Scraper',           // Page title
-            'CT Scraper',                      // Menu title
-            'manage_options',                  // Capability
-            $this->plugin_slug,                // Menu slug
-            array($this, 'render_admin_page'), // Callback function
-            'dashicons-rss',                   // Icon
-            30                                 // Position
-        );
-    }
-
-    public function render_admin_page() {
-        if (!current_user_can('manage_options')) {
-            wp_die(__('Sorry, you do not have sufficient permissions to access this page.'));
-        }
-        
-        $template_path = CTS_PLUGIN_DIR . 'templates/admin-page.php';
-        if (!file_exists($template_path)) {
-            wp_die(__('Error: Admin template file not found at: ' . $template_path));
-        }
-        
-        require_once $template_path;
-    }
-
-    public function register_settings() {
-        register_setting('cts_options', 'cts_sources');
-        register_setting('cts_options', 'cts_keywords');
-        register_setting('cts_options', 'cts_openai_api_key');
-        register_setting('cts_options', 'cts_claude_api_key');
-        register_setting('cts_options', 'cts_summary_length', array($this, 'sanitize_summary_length'));
-        register_setting('cts_options', 'cts_auto_fetch');
-        register_setting('cts_options', 'cts_fetch_frequency');
-    }
-
-    public function sanitize_summary_length($length) {
-        $length = intval($length);
-        if ($length < 100) return 100;  // Minimum 100 words
-        if ($length > 700) return 700;  // Maximum 700 words
-        return $length;
     }
 
     public function enqueue_assets($hook) {
@@ -371,4 +327,4 @@ class CTS_Admin {
             }
         }
     }
-}
+} 
