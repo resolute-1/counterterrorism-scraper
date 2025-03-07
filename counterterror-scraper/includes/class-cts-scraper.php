@@ -1,15 +1,22 @@
 <?php
+if (!defined('ABSPATH')) exit;
+
 class CTS_Scraper {
     private $ai_service;
     private $cache;
     private $logger;
     private $max_articles_per_source = 10;
-    private $fetch_timeout = 15;
+    private $fetch_timeout = 30;
 
     public function __construct($ai_service, $cache, $logger) {
         $this->ai_service = $ai_service;
         $this->cache = $cache;
         $this->logger = $logger;
+        $this->logger->log('Initializing scraper');
+        
+        if ($this->cache) {
+            $this->logger->log('Using provided cache instance');
+        }
     }
 
     public function scrape_and_process() {
@@ -17,17 +24,25 @@ class CTS_Scraper {
         
         $sources = $this->get_sources();
         $keywords = $this->get_keywords();
+        
+        $this->logger->log('Found sources: ' . print_r($sources, true));
+        $this->logger->log('Found keywords: ' . print_r($keywords, true));
+        
         $articles = [];
 
         foreach ($sources as $source) {
             try {
+                $this->logger->log('Processing source: ' . $source);
                 $feed_articles = $this->process_source($source, $keywords);
+                $this->logger->log('Found ' . count($feed_articles) . ' matching articles from source');
                 $articles = array_merge($articles, $feed_articles);
             } catch (Exception $e) {
                 $this->logger->log("Error processing source {$source}: " . $e->getMessage(), 'error');
                 continue;
             }
         }
+
+        $this->logger->log('Total matching articles found: ' . count($articles));
 
         if (!empty($articles)) {
             $this->create_posts($articles);
@@ -39,41 +54,68 @@ class CTS_Scraper {
     }
 
     private function get_sources() {
-        $sources = explode("\n", get_option('cts_sources', ''));
-        return array_filter(array_map('trim', $sources));
+        $sources_option = get_option('cts_sources', '');
+        if (empty($sources_option)) {
+            $this->logger->log('No sources found in options');
+            return array();
+        }
+
+        $sources = array_filter(array_map('trim', explode("\n", $sources_option)));
+        if (empty($sources)) {
+            $this->logger->log('No valid sources after filtering');
+            return array();
+        }
+
+        $this->logger->log('Found ' . count($sources) . ' sources to process');
+        return $sources;
     }
 
     private function get_keywords() {
-        $keywords = explode(',', get_option('cts_keywords', ''));
-        return array_filter(array_map('trim', $keywords));
+        $keywords = get_option('cts_keywords', '');
+        return array_filter(array_map('trim', explode(',', $keywords)));
     }
 
     private function process_source($source, $keywords) {
+        $this->logger->log('Processing source: ' . $source);
         $cache_key = 'feed_' . md5($source);
         $cached_feed = $this->cache->get($cache_key);
 
         if ($cached_feed) {
+            $this->logger->log('Using cached feed data');
             return $this->filter_articles($cached_feed, $keywords);
         }
 
-        $context = stream_context_create([
-            'http' => [
-                'timeout' => $this->fetch_timeout,
-                'user_agent' => 'CounterTerror Scraper/2.0 (WordPress Plugin)'
-            ],
-            'ssl' => [
-                'verify_peer' => true,
-                'verify_peer_name' => true
-            ]
-        ]);
-
-        $xml = @simplexml_load_file($source, null, LIBXML_NOWARNING | LIBXML_NOERROR, null, true, $context);
-
-        if (!$xml) {
-            throw new Exception('Failed to load RSS feed');
+        $this->logger->log('Fetching fresh feed data');
+        
+        // Add user agent and increase timeout
+        $args = array(
+            'timeout' => 30,
+            'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        );
+        
+        // Use wp_remote_get instead of simplexml_load_file
+        $response = wp_remote_get($source, $args);
+        
+        if (is_wp_error($response)) {
+            $this->logger->log('Error fetching feed: ' . $response->get_error_message(), 'error');
+            return array();
+        }
+        
+        $body = wp_remote_retrieve_body($response);
+        if (empty($body)) {
+            $this->logger->log('Empty response from feed', 'error');
+            return array();
         }
 
-        $articles = [];
+        libxml_use_internal_errors(true);
+        $xml = simplexml_load_string($body);
+        
+        if (!$xml) {
+            $this->logger->log('Failed to parse XML feed', 'error');
+            return array();
+        }
+
+        $articles = array();
         $count = 0;
 
         foreach ($xml->channel->item as $item) {
@@ -81,30 +123,29 @@ class CTS_Scraper {
                 break;
             }
 
-            $article = [
+            $article = array(
                 'title' => (string)$item->title,
                 'content' => strip_tags((string)$item->description),
                 'link' => (string)$item->link,
                 'pubDate' => (string)$item->pubDate,
                 'source_name' => (string)$xml->channel->title,
-                'guid' => (string)$item->guid
-            ];
-
-            // Check if article was already processed
-            if ($this->is_article_processed($article['guid'])) {
-                continue;
-            }
+                'guid' => (string)$item->guid ?: (string)$item->link
+            );
 
             $articles[] = $article;
             $count++;
         }
 
-        $this->cache->set($cache_key, $articles, 1800); // Cache for 30 minutes
+        if (!empty($articles)) {
+            $this->cache->set($cache_key, $articles, 1800); // Cache for 30 minutes
+        }
+
         return $this->filter_articles($articles, $keywords);
     }
 
     private function filter_articles($articles, $keywords) {
-        return array_filter($articles, function($article) use ($keywords) {
+        $this->logger->log('Filtering ' . count($articles) . ' articles with keywords: ' . implode(', ', $keywords));
+        $filtered = array_filter($articles, function($article) use ($keywords) {
             foreach ($keywords as $keyword) {
                 if (stripos($article['title'], $keyword) !== false || 
                     stripos($article['content'], $keyword) !== false) {
@@ -113,48 +154,36 @@ class CTS_Scraper {
             }
             return false;
         });
+        $this->logger->log('Found ' . count($filtered) . ' matching articles after filtering');
+        return $filtered;
     }
 
     private function create_posts($articles) {
-        $summary_content = '<h2>Daily Terrorism News Summary - ' . date('F j, Y') . '</h2>';
-        
         foreach ($articles as $article) {
+            // Skip if already processed
+            if ($this->is_article_processed($article['guid'])) {
+                continue;
+            }
+
             // Generate AI summary
             $summary = $this->ai_service->generate_summary($article['content'], $article['title']);
             
-            // Create individual post
-            $post_content = $this->format_post_content($article, $summary);
-            
-            $post_id = wp_insert_post([
+            // Create post
+            $post_id = wp_insert_post(array(
                 'post_title' => sanitize_text_field($article['title']),
-                'post_content' => wp_kses_post($post_content),
-                'post_status' => get_option('cts_post_status', 'draft'),
+                'post_content' => wp_kses_post($this->format_post_content($article, $summary)),
+                'post_status' => 'draft',
                 'post_type' => 'post',
                 'post_date' => date('Y-m-d H:i:s', strtotime($article['pubDate']))
-            ]);
+            ));
 
             if ($post_id) {
-                // Add source metadata
                 add_post_meta($post_id, '_cts_source_url', esc_url($article['link']));
                 add_post_meta($post_id, '_cts_source_name', sanitize_text_field($article['source_name']));
                 add_post_meta($post_id, '_cts_original_guid', sanitize_text_field($article['guid']));
-                
-                // Add to summary
-                $summary_content .= $this->format_summary_entry($article, $summary);
-                
                 $this->mark_article_processed($article['guid']);
-            } else {
-                $this->logger->log("Failed to create post for article: {$article['title']}", 'error');
             }
         }
-
-        // Create summary post
-        wp_insert_post([
-            'post_title' => 'Terrorism News Summary - ' . date('F j, Y'),
-            'post_content' => wp_kses_post($summary_content),
-            'post_status' => get_option('cts_post_status', 'draft'),
-            'post_type' => 'post'
-        ]);
     }
 
     private function format_post_content($article, $summary) {
@@ -162,7 +191,7 @@ class CTS_Scraper {
             '<div class="article-summary">
                 <p>%s</p>
                 <div class="article-metadata">
-                    <p class="source-link">Originally published by <a href="%s" target="_blank" rel="nofollow">%s</a> on %s</p>
+                    <p class="source-link">Originally published by <a href="%s" target="_blank" rel="nofollow">%s</a></p>
                     <p class="read-more"><a href="%s" target="_blank" rel="nofollow">Read the full article →</a></p>
                 </div>
                 <div class="disclaimer">
@@ -173,23 +202,7 @@ class CTS_Scraper {
             esc_html($summary),
             esc_url($article['link']),
             esc_html($article['source_name']),
-            esc_html(date('F j, Y', strtotime($article['pubDate']))),
             esc_url($article['link'])
-        );
-    }
-
-    private function format_summary_entry($article, $summary) {
-        return sprintf(
-            '<div class="summary-entry">
-                <h3><a href="%s" target="_blank" rel="nofollow">%s</a></h3>
-                <p>%s</p>
-                <p class="source-info">Source: %s | %s</p>
-            </div>',
-            esc_url($article['link']),
-            esc_html($article['title']),
-            esc_html(wp_trim_words($summary, 30)),
-            esc_html($article['source_name']),
-            esc_html(date('F j, Y', strtotime($article['pubDate'])))
         );
     }
 
@@ -206,36 +219,4 @@ class CTS_Scraper {
     private function mark_article_processed($guid) {
         $this->cache->set('processed_' . md5($guid), true, 86400 * 30); // Store for 30 days
     }
-
-    public function test_source($source) {
-        try {
-            $context = stream_context_create([
-                'http' => [
-                    'timeout' => 5,
-                    'user_agent' => 'CounterTerror Scraper/2.0 (WordPress Plugin)'
-                ]
-            ]);
-
-            $xml = @simplexml_load_file($source, null, LIBXML_NOWARNING | LIBXML_NOERROR, null, true, $context);
-
-            if (!$xml) {
-                return [
-                    'success' => false,
-                    'message' => 'Failed to load RSS feed'
-                ];
-            }
-
-            $item_count = count($xml->channel->item);
-            return [
-                'success' => true,
-                'message' => "Successfully loaded feed ({$item_count} items found)",
-                'feed_title' => (string)$xml->channel->title
-            ];
-        } catch (Exception $e) {
-            return [
-                'success' => false,
-                'message' => $e->getMessage()
-            ];
-        }
-    }
-}
+} 
