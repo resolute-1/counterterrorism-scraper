@@ -99,86 +99,36 @@ class CTS_Scraper {
 
         $this->logger->log('Fetching fresh feed data');
         
-        $args = array(
-            'timeout' => $this->fetch_timeout,
-            'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'sslverify' => false
-        );
+        require_once(ABSPATH . WPINC . '/feed.php');
+        $rss = fetch_feed($source);
         
-        $this->logger->log('Making request with args: ' . print_r($args, true));
-        $response = wp_remote_get($source, $args);
-        
-        if (is_wp_error($response)) {
-            $this->logger->log('Error fetching feed: ' . $response->get_error_message(), 'error');
-            return array();
-        }
-        
-        $response_code = wp_remote_retrieve_response_code($response);
-        $this->logger->log('Response code: ' . $response_code);
-        
-        if ($response_code !== 200) {
-            $this->logger->log("HTTP error fetching feed. Response code: $response_code", 'error');
+        if (is_wp_error($rss)) {
+            $this->logger->log('Error fetching feed: ' . $rss->get_error_message(), 'error');
             return array();
         }
 
-        $body = wp_remote_retrieve_body($response);
-        if (empty($body)) {
-            $this->logger->log('Empty response from feed', 'error');
-            return array();
-        }
-
-        $this->logger->log('Received feed body length: ' . strlen($body));
-
-        libxml_use_internal_errors(true);
-        $xml = simplexml_load_string($body);
+        $maxitems = $rss->get_item_quantity($this->max_articles_per_source);
+        $this->logger->log('Found ' . $maxitems . ' items in feed');
         
-        if (!$xml) {
-            $errors = libxml_get_errors();
-            $error_msg = '';
-            foreach ($errors as $error) {
-                $error_msg .= "Line {$error->line}: {$error->message}\n";
-            }
-            libxml_clear_errors();
-            $this->logger->log('Failed to parse XML feed: ' . $error_msg, 'error');
-            return array();
-        }
-
+        $rss_items = $rss->get_items(0, $maxitems);
         $articles = array();
-        $count = 0;
 
-        // Handle both RSS and Atom feeds
-        if (isset($xml->channel)) {
-            $this->logger->log('Processing as RSS feed');
-            $this->logger->log('Channel title: ' . (string)$xml->channel->title);
-            $this->logger->log('Number of items: ' . count($xml->channel->item));
-            
-            foreach ($xml->channel->item as $item) {
-                if ($count >= $this->max_articles_per_source) {
-                    break;
-                }
+        foreach ($rss_items as $item) {
+            $article = array(
+                'title' => $item->get_title(),
+                'content' => strip_tags($item->get_content() ?: $item->get_description()),
+                'link' => $item->get_permalink(),
+                'pubDate' => $item->get_date('Y-m-d H:i:s'),
+                'source_name' => $rss->get_title(),
+                'guid' => $item->get_id() ?: $item->get_permalink()
+            );
 
-                $article = array(
-                    'title' => (string)$item->title,
-                    'content' => strip_tags((string)($item->description ?? $item->content)),
-                    'link' => (string)$item->link,
-                    'pubDate' => (string)$item->pubDate,
-                    'source_name' => (string)$xml->channel->title,
-                    'guid' => (string)($item->guid ?? $item->link)
-                );
-
-                $this->logger->log('Found article: ' . $article['title']);
-                $articles[] = $article;
-                $count++;
-            }
-        } elseif (isset($xml->entry)) {
-            $this->logger->log('Processing as Atom feed');
-            // ... rest of Atom processing ...
-        } else {
-            $this->logger->log('Feed format not recognized - no channel or entry elements found');
+            $this->logger->log('Found article: ' . $article['title']);
+            $articles[] = $article;
         }
 
         if (!empty($articles)) {
-            $this->cache->set($cache_key, $articles, 1800);
+            $this->cache->set($cache_key, $articles, 1800); // Cache for 30 minutes
             $this->logger->log('Successfully loaded and cached ' . count($articles) . ' articles from feed');
         }
 
@@ -262,4 +212,4 @@ class CTS_Scraper {
     private function mark_article_processed($guid) {
         $this->cache->set('processed_' . md5($guid), true, 86400 * 30); // Store for 30 days
     }
-} 
+}
