@@ -250,29 +250,48 @@ class Settings_Page {
                 return;
             }
 
-            $feed_url = isset($_POST['feed_url']) ? trim($_POST['feed_url']) : '';
-            
-            if (empty($feed_url)) {
-                wp_send_json_error('Feed URL is required');
+            // Get all feeds from settings instead of from POST
+            $feeds = get_option('cts_sources', '');
+            if (empty($feeds)) {
+                wp_send_json_error('No feeds configured');
                 return;
             }
+
+            $feed_array = array_filter(array_map('trim', explode("\n", $feeds)));
+            $results = array();
+            $has_error = false;
 
             require_once(ABSPATH . WPINC . '/feed.php');
-            $rss = fetch_feed($feed_url);
             
-            if (is_wp_error($rss)) {
-                wp_send_json_error('Error fetching feed: ' . $rss->get_error_message());
-                return;
+            foreach ($feed_array as $feed_url) {
+                $rss = fetch_feed($feed_url);
+                
+                if (is_wp_error($rss)) {
+                    $results[] = sprintf(
+                        '❌ Error fetching %s: %s',
+                        $feed_url,
+                        $rss->get_error_message()
+                    );
+                    $has_error = true;
+                    continue;
+                }
+
+                $feed_title = $rss->get_title();
+                $item_count = $rss->get_item_quantity();
+                
+                $results[] = sprintf(
+                    '✅ Successfully connected to %s: %s (Found %d items)',
+                    $feed_url,
+                    esc_html($feed_title),
+                    $item_count
+                );
             }
 
-            $feed_title = $rss->get_title();
-            $item_count = $rss->get_item_quantity();
-            
-            wp_send_json_success(sprintf(
-                'Successfully connected to feed: %s (Found %d items)',
-                esc_html($feed_title),
-                $item_count
-            ));
+            if ($has_error) {
+                wp_send_json_error(implode("\n", $results));
+            } else {
+                wp_send_json_success(implode("\n", $results));
+            }
 
         } catch (Exception $e) {
             wp_send_json_error('Error: ' . $e->getMessage());
@@ -344,14 +363,41 @@ class Settings_Page {
                 return;
             }
 
-            $result = $this->scraper->run_scrape();
-            
-            if (is_wp_error($result)) {
-                wp_send_json_error($result->get_error_message());
+            // Get settings
+            $feeds = get_option('cts_sources', '');
+            $keywords = get_option('cts_keywords', '');
+            $summary_length = get_option('cts_summary_length', 700);
+
+            if (empty($feeds) || empty($keywords)) {
+                wp_send_json_error('Missing feeds or keywords in settings');
                 return;
             }
 
-            wp_send_json_success($result);
+            $feed_array = array_filter(array_map('trim', explode("\n", $feeds)));
+            $keyword_array = array_filter(array_map('trim', explode(',', $keywords)));
+
+            $created = 0;
+            $skipped = 0;
+
+            foreach ($feed_array as $feed_url) {
+                if ($this->scraper) {
+                    $result = $this->scraper->process_feed($feed_url, $keyword_array);
+                    if (is_array($result)) {
+                        $created += $result['created'];
+                        $skipped += $result['skipped'];
+                    }
+                }
+            }
+
+            wp_send_json_success(array(
+                'message' => sprintf(
+                    'Processing complete. Created %d articles, skipped %d items.',
+                    $created,
+                    $skipped
+                ),
+                'created' => $created,
+                'skipped' => $skipped
+            ));
 
         } catch (Exception $e) {
             wp_send_json_error('Error: ' . $e->getMessage());
