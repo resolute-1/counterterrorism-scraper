@@ -358,33 +358,72 @@ class Settings_Page {
                 return;
             }
 
-            error_log('Fetch articles started');
-            error_log('Scraper initialized: ' . (isset($this->scraper) ? 'yes' : 'no'));
+            if ($this->logger) {
+                $this->logger->log('Manual fetch articles started');
+            }
 
             if (!isset($this->scraper)) {
-                wp_send_json_error('Scraper not initialized');
+                $error_msg = 'Scraper not initialized';
+                if ($this->logger) {
+                    $this->logger->log($error_msg, 'error');
+                }
+                wp_send_json_error($error_msg);
                 return;
             }
 
             try {
+                // Check if required settings are configured
+                $feeds = get_option('cts_sources', '');
+                $keywords = get_option('cts_keywords', '');
+                
+                if (empty($feeds) || empty($keywords)) {
+                    $error_msg = 'Please configure RSS feeds and keywords in settings first';
+                    if ($this->logger) {
+                        $this->logger->log($error_msg, 'error');
+                    }
+                    wp_send_json_error($error_msg);
+                    return;
+                }
+
+                // Check if at least one AI service is configured
+                $openai_key = get_option('cts_openai_api_key', '');
+                $claude_key = get_option('cts_claude_api_key', '');
+                
+                if (empty($openai_key) && empty($claude_key)) {
+                    $error_msg = 'Please configure at least one AI service API key';
+                    if ($this->logger) {
+                        $this->logger->log($error_msg, 'error');
+                    }
+                    wp_send_json_error($error_msg);
+                    return;
+                }
+
                 $articles_created = $this->scraper->scrape_and_process();
                 
+                $success_msg = sprintf('Processing complete. Created %d articles.', $articles_created);
+                if ($this->logger) {
+                    $this->logger->log($success_msg);
+                }
+                
                 wp_send_json_success(array(
-                    'message' => sprintf(
-                        'Processing complete. Created %d articles.',
-                        $articles_created
-                    ),
+                    'message' => $success_msg,
                     'created' => $articles_created
                 ));
 
             } catch (Exception $e) {
-                error_log('Error in scrape_and_process: ' . $e->getMessage());
-                wp_send_json_error('Error processing feeds: ' . $e->getMessage());
+                $error_msg = 'Error processing feeds: ' . $e->getMessage();
+                if ($this->logger) {
+                    $this->logger->log($error_msg, 'error');
+                }
+                wp_send_json_error($error_msg);
             }
 
         } catch (Exception $e) {
-            error_log('CTS Error in ajax_fetch_articles: ' . $e->getMessage());
-            wp_send_json_error('Error: ' . $e->getMessage());
+            $error_msg = 'Error in ajax_fetch_articles: ' . $e->getMessage();
+            if ($this->logger) {
+                $this->logger->log($error_msg, 'error');
+            }
+            wp_send_json_error($error_msg);
         }
     }
 }
