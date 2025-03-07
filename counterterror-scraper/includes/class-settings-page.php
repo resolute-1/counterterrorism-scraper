@@ -4,10 +4,51 @@ if (!defined('ABSPATH')) exit;
 class Settings_Page {
     private $options;
     private $plugin_slug = 'counterterror-scraper';
+    private $scraper;
+    private $ai_service;
+    private $security;
+    private $logger;
 
-    public function __construct() {
+    public function __construct($scraper = null, $ai_service = null, $security = null, $logger = null) {
+        $this->scraper = $scraper;
+        $this->ai_service = $ai_service;
+        $this->security = $security;
+        $this->logger = $logger;
+
         add_action('admin_menu', array($this, 'add_plugin_page'));
         add_action('admin_init', array($this, 'register_settings'));
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_assets'));
+        
+        // Add AJAX handlers
+        add_action('wp_ajax_cts_test_feed', array($this, 'ajax_test_feed'));
+        add_action('wp_ajax_cts_test_ai', array($this, 'ajax_test_ai'));
+        add_action('wp_ajax_cts_fetch_articles', array($this, 'ajax_fetch_articles'));
+    }
+
+    public function enqueue_assets($hook) {
+        if (strpos($hook, $this->plugin_slug) === false) {
+            return;
+        }
+
+        wp_enqueue_style(
+            'cts-admin-styles',
+            plugins_url('assets/css/cts-admin.css', dirname(__FILE__)),
+            array(),
+            CTS_VERSION
+        );
+
+        wp_enqueue_script(
+            'cts-admin-script',
+            plugins_url('assets/js/cts-admin.js', dirname(__FILE__)),
+            array('jquery'),
+            CTS_VERSION,
+            true
+        );
+
+        wp_localize_script('cts-admin-script', 'ctsAdmin', array(
+            'nonce' => wp_create_nonce('cts-admin-nonce'),
+            'ajaxurl' => admin_url('admin-ajax.php')
+        ));
     }
 
     public function add_plugin_page() {
@@ -198,7 +239,125 @@ class Settings_Page {
         $time = get_option('cts_schedule_time', '00:00');
         echo "<input type='time' name='cts_schedule_time' value='$time'>";
     }
+
+    // Add AJAX handlers from CTS_Admin
+    public function ajax_test_feed() {
+        try {
+            check_ajax_referer('cts-admin-nonce', 'nonce');
+            
+            if (!current_user_can('manage_options')) {
+                wp_send_json_error('Unauthorized');
+                return;
+            }
+
+            $feed_url = isset($_POST['feed_url']) ? trim($_POST['feed_url']) : '';
+            
+            if (empty($feed_url)) {
+                wp_send_json_error('Feed URL is required');
+                return;
+            }
+
+            require_once(ABSPATH . WPINC . '/feed.php');
+            $rss = fetch_feed($feed_url);
+            
+            if (is_wp_error($rss)) {
+                wp_send_json_error('Error fetching feed: ' . $rss->get_error_message());
+                return;
+            }
+
+            $feed_title = $rss->get_title();
+            $item_count = $rss->get_item_quantity();
+            
+            wp_send_json_success(sprintf(
+                'Successfully connected to feed: %s (Found %d items)',
+                esc_html($feed_title),
+                $item_count
+            ));
+
+        } catch (Exception $e) {
+            wp_send_json_error('Error: ' . $e->getMessage());
+        }
+    }
+
+    public function ajax_test_ai() {
+        try {
+            check_ajax_referer('cts-admin-nonce', 'nonce');
+            
+            if (!current_user_can('manage_options')) {
+                wp_send_json_error('Unauthorized');
+                return;
+            }
+
+            $service = isset($_POST['service']) ? $_POST['service'] : '';
+            
+            if (!in_array($service, array('openai', 'claude'))) {
+                wp_send_json_error('Invalid AI service specified');
+                return;
+            }
+
+            $test_content = "This is a test article. Please summarize it to verify the API connection is working.";
+            
+            if ($service === 'openai') {
+                $api_key = get_option('cts_openai_api_key');
+                if (empty($api_key)) {
+                    wp_send_json_error('OpenAI API key is not configured');
+                    return;
+                }
+                $summary = $this->ai_service->try_openai_summary($test_content, 100);
+            } else {
+                $api_key = get_option('cts_claude_api_key');
+                if (empty($api_key)) {
+                    wp_send_json_error('Claude API key is not configured');
+                    return;
+                }
+                $summary = $this->ai_service->try_claude_summary($test_content, 100);
+            }
+
+            if ($summary) {
+                wp_send_json_success(sprintf(
+                    '%s API connection successful. Test summary generated.',
+                    ucfirst($service)
+                ));
+            } else {
+                wp_send_json_error(sprintf(
+                    'Failed to generate test summary using %s API',
+                    ucfirst($service)
+                ));
+            }
+
+        } catch (Exception $e) {
+            wp_send_json_error('Error: ' . $e->getMessage());
+        }
+    }
+
+    public function ajax_fetch_articles() {
+        try {
+            check_ajax_referer('cts-admin-nonce', 'nonce');
+            
+            if (!current_user_can('manage_options')) {
+                wp_send_json_error('Unauthorized');
+                return;
+            }
+
+            if (!isset($this->scraper)) {
+                wp_send_json_error('Scraper not initialized');
+                return;
+            }
+
+            $result = $this->scraper->run_scrape();
+            
+            if (is_wp_error($result)) {
+                wp_send_json_error($result->get_error_message());
+                return;
+            }
+
+            wp_send_json_success($result);
+
+        } catch (Exception $e) {
+            wp_send_json_error('Error: ' . $e->getMessage());
+        }
+    }
 }
 
-// Initialize the settings page
-new Settings_Page(); 
+// Do NOT initialize here anymore since we're passing dependencies
+// The main plugin file will handle initialization 
