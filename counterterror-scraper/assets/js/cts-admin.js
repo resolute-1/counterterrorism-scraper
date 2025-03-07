@@ -112,11 +112,11 @@ jQuery(document).ready(function($) {
     $(document).on('click', '.notice-dismiss', function() {
         $(this).closest('.notice').remove();
     });
-});
 
-function showMessage(type, message) {
-    const $wrap = $('.wrap:first');
-    const $notice = $('<div class="notice notice-' + (type === 'success' ? 'success' : 'error') + ' is-dismissible"><p>' + message + '</p></div>');
-    $wrap.find('.notice').remove();
-    $wrap.prepend($notice);
-} 
+    function showMessage(type, message) {
+        const $wrap = $('.wrap:first');
+        const $notice = $('<div class="notice notice-' + (type === 'success' ? 'success' : 'error') + ' is-dismissible"><p>' + message + '</p></div>');
+        $wrap.find('.notice').remove();
+        $wrap.prepend($notice);
+    }
+}); 
