@@ -21,16 +21,15 @@ jQuery(document).ready(function($) {
                 nonce: ctsAdmin.nonce
             },
             success: function(response) {
-                var messageClass = response.success ? 'notice-success' : 'notice-error';
-                var message = '<div class="notice ' + messageClass + ' is-dismissible"><p>' + 
-                             response.data.replace(/\n/g, '<br>') + '</p></div>';
-                
-                $('.wrap > h1').after(message);
+                if (response.success) {
+                    showMessage('success', response.data);
+                } else {
+                    showMessage('error', response.data || 'Error testing feeds');
+                }
             },
             error: function(xhr, status, error) {
-                $('.wrap > h1').after(
-                    '<div class="notice notice-error is-dismissible"><p>Error: ' + error + '</p></div>'
-                );
+                showMessage('error', 'Ajax Error: ' + (error || 'Unknown error occurred'));
+                console.error('Ajax error:', {xhr, status, error});
             },
             complete: function() {
                 button.prop('disabled', false).text('Test Feeds');
@@ -42,11 +41,9 @@ jQuery(document).ready(function($) {
     $('#fetch-articles').on('click', function(e) {
         e.preventDefault();
         const $button = $(this);
-        const $message = $('.notice');
         
         $button.prop('disabled', true).text('Fetching...');
-        $message.remove();
-
+        
         $.ajax({
             url: ctsAdmin.ajaxurl,
             type: 'POST',
@@ -56,16 +53,15 @@ jQuery(document).ready(function($) {
             },
             success: function(response) {
                 if (response.success) {
-                    showMessage('success', response.data.message);
-                    if (response.data.created > 0) {
-                        showMessage('success', response.data.message + ' <a href="edit.php" class="button">View Draft Posts</a>');
-                    }
+                    const message = response.data.message + 
+                        (response.data.created > 0 ? ' <a href="edit.php" class="button">View Draft Posts</a>' : '');
+                    showMessage('success', message);
                 } else {
                     showMessage('error', 'Error: ' + (response.data || 'Unknown error occurred'));
                 }
             },
             error: function(xhr, status, error) {
-                showMessage('error', 'Ajax Error: ' + error + ' (' + status + ')');
+                showMessage('error', 'Ajax Error: ' + (error || 'Unknown error occurred'));
                 console.error('Ajax error:', {xhr, status, error});
             },
             complete: function() {
@@ -91,16 +87,15 @@ jQuery(document).ready(function($) {
                 service: service
             },
             success: function(response) {
-                var messageClass = response.success ? 'notice-success' : 'notice-error';
-                var message = '<div class="notice ' + messageClass + ' is-dismissible"><p>' + 
-                             response.data + '</p></div>';
-                
-                $('.wrap > h1').after(message);
+                if (response.success) {
+                    showMessage('success', response.data);
+                } else {
+                    showMessage('error', response.data || 'Error testing ' + service);
+                }
             },
             error: function(xhr, status, error) {
-                $('.wrap > h1').after(
-                    '<div class="notice notice-error is-dismissible"><p>Error: ' + error + '</p></div>'
-                );
+                showMessage('error', 'Ajax Error: ' + (error || 'Unknown error occurred'));
+                console.error('Ajax error:', {xhr, status, error});
             },
             complete: function() {
                 button.prop('disabled', false).text('Test ' + service.charAt(0).toUpperCase() + service.slice(1) + ' Connection');
