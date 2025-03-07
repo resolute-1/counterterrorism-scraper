@@ -358,7 +358,6 @@ class Settings_Page {
                 return;
             }
 
-            // Debug logging
             error_log('Fetch articles started');
             error_log('Scraper initialized: ' . (isset($this->scraper) ? 'yes' : 'no'));
 
@@ -367,50 +366,21 @@ class Settings_Page {
                 return;
             }
 
-            // Get settings
-            $feeds = get_option('cts_sources', '');
-            $keywords = get_option('cts_keywords', '');
-            
-            // Debug logging
-            error_log('Feeds: ' . print_r($feeds, true));
-            error_log('Keywords: ' . print_r($keywords, true));
+            try {
+                $articles_created = $this->scraper->scrape_and_process();
+                
+                wp_send_json_success(array(
+                    'message' => sprintf(
+                        'Processing complete. Created %d articles.',
+                        $articles_created
+                    ),
+                    'created' => $articles_created
+                ));
 
-            if (empty($feeds) || empty($keywords)) {
-                wp_send_json_error('Missing feeds or keywords in settings');
-                return;
+            } catch (Exception $e) {
+                error_log('Error in scrape_and_process: ' . $e->getMessage());
+                wp_send_json_error('Error processing feeds: ' . $e->getMessage());
             }
-
-            $feed_array = array_filter(array_map('trim', explode("\n", $feeds)));
-            $keyword_array = array_filter(array_map('trim', explode(',', $keywords)));
-
-            $created = 0;
-            $skipped = 0;
-
-            foreach ($feed_array as $feed_url) {
-                error_log('Processing feed: ' . $feed_url);
-                if ($this->scraper) {
-                    try {
-                        $result = $this->scraper->process_feed($feed_url, $keyword_array);
-                        error_log('Feed result: ' . print_r($result, true));
-                        if (is_array($result)) {
-                            $created += $result['created'];
-                            $skipped += $result['skipped'];
-                        }
-                    } catch (Exception $e) {
-                        error_log('Error processing feed: ' . $e->getMessage());
-                    }
-                }
-            }
-
-            wp_send_json_success(array(
-                'message' => sprintf(
-                    'Processing complete. Created %d articles, skipped %d items.',
-                    $created,
-                    $skipped
-                ),
-                'created' => $created,
-                'skipped' => $skipped
-            ));
 
         } catch (Exception $e) {
             error_log('CTS Error in ajax_fetch_articles: ' . $e->getMessage());
