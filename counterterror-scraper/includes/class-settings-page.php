@@ -385,17 +385,10 @@ class Settings_Page {
                     return;
                 }
 
-                // Check if at least one AI service is configured
-                $openai_key = get_option('cts_openai_api_key', '');
-                $claude_key = get_option('cts_claude_api_key', '');
-                
-                if (empty($openai_key) && empty($claude_key)) {
-                    $error_msg = 'Please configure at least one AI service API key';
-                    if ($this->logger) {
-                        $this->logger->log($error_msg, 'error');
-                    }
-                    wp_send_json_error($error_msg);
-                    return;
+                // Log settings before processing
+                if ($this->logger) {
+                    $this->logger->log('Starting fetch with feeds: ' . $feeds);
+                    $this->logger->log('Using keywords: ' . $keywords);
                 }
 
                 $articles_created = $this->scraper->scrape_and_process();
