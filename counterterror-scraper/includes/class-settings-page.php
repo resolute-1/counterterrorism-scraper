@@ -358,6 +358,10 @@ class Settings_Page {
                 return;
             }
 
+            // Debug logging
+            error_log('Fetch articles started');
+            error_log('Scraper initialized: ' . (isset($this->scraper) ? 'yes' : 'no'));
+
             if (!isset($this->scraper)) {
                 wp_send_json_error('Scraper not initialized');
                 return;
@@ -366,7 +370,10 @@ class Settings_Page {
             // Get settings
             $feeds = get_option('cts_sources', '');
             $keywords = get_option('cts_keywords', '');
-            $summary_length = get_option('cts_summary_length', 700);
+            
+            // Debug logging
+            error_log('Feeds: ' . print_r($feeds, true));
+            error_log('Keywords: ' . print_r($keywords, true));
 
             if (empty($feeds) || empty($keywords)) {
                 wp_send_json_error('Missing feeds or keywords in settings');
@@ -380,11 +387,17 @@ class Settings_Page {
             $skipped = 0;
 
             foreach ($feed_array as $feed_url) {
+                error_log('Processing feed: ' . $feed_url);
                 if ($this->scraper) {
-                    $result = $this->scraper->process_feed($feed_url, $keyword_array);
-                    if (is_array($result)) {
-                        $created += $result['created'];
-                        $skipped += $result['skipped'];
+                    try {
+                        $result = $this->scraper->process_feed($feed_url, $keyword_array);
+                        error_log('Feed result: ' . print_r($result, true));
+                        if (is_array($result)) {
+                            $created += $result['created'];
+                            $skipped += $result['skipped'];
+                        }
+                    } catch (Exception $e) {
+                        error_log('Error processing feed: ' . $e->getMessage());
                     }
                 }
             }
@@ -400,6 +413,7 @@ class Settings_Page {
             ));
 
         } catch (Exception $e) {
+            error_log('CTS Error in ajax_fetch_articles: ' . $e->getMessage());
             wp_send_json_error('Error: ' . $e->getMessage());
         }
     }
