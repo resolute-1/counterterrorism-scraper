@@ -6,7 +6,7 @@ class CTS_Scraper {
     private $cache;
     private $logger;
     private $max_articles_per_source = 10;
-    private $fetch_timeout = 30;
+    private $fetch_timeout = 60;
 
     public function __construct($ai_service, $cache, $logger) {
         $this->ai_service = $ai_service;
@@ -20,37 +20,49 @@ class CTS_Scraper {
     }
 
     public function scrape_and_process() {
-        $this->logger->log('Starting scraping process');
-        
-        $sources = $this->get_sources();
-        $keywords = $this->get_keywords();
-        
-        $this->logger->log('Found sources: ' . print_r($sources, true));
-        $this->logger->log('Found keywords: ' . print_r($keywords, true));
-        
-        $articles = [];
-
-        foreach ($sources as $source) {
-            try {
-                $this->logger->log('Processing source: ' . $source);
-                $feed_articles = $this->process_source($source, $keywords);
-                $this->logger->log('Found ' . count($feed_articles) . ' matching articles from source');
-                $articles = array_merge($articles, $feed_articles);
-            } catch (Exception $e) {
-                $this->logger->log("Error processing source {$source}: " . $e->getMessage(), 'error');
-                continue;
+        try {
+            $this->logger->log('Starting scraping process');
+            
+            $sources = $this->get_sources();
+            if (empty($sources)) {
+                throw new Exception('No sources configured');
             }
+            
+            $keywords = $this->get_keywords();
+            if (empty($keywords)) {
+                throw new Exception('No keywords configured');
+            }
+            
+            $this->logger->log('Found sources: ' . print_r($sources, true));
+            $this->logger->log('Found keywords: ' . print_r($keywords, true));
+            
+            $articles = [];
+
+            foreach ($sources as $source) {
+                try {
+                    $this->logger->log('Processing source: ' . $source);
+                    $feed_articles = $this->process_source($source, $keywords);
+                    $this->logger->log('Found ' . count($feed_articles) . ' matching articles from source');
+                    $articles = array_merge($articles, $feed_articles);
+                } catch (Exception $e) {
+                    $this->logger->log("Error processing source {$source}: " . $e->getMessage(), 'error');
+                    continue;
+                }
+            }
+
+            $this->logger->log('Total matching articles found: ' . count($articles));
+
+            if (!empty($articles)) {
+                $this->create_posts($articles);
+            } else {
+                $this->logger->log('No relevant articles found');
+            }
+
+            return count($articles);
+        } catch (Exception $e) {
+            $this->logger->log('Error in scrape_and_process: ' . $e->getMessage(), 'error');
+            throw $e;
         }
-
-        $this->logger->log('Total matching articles found: ' . count($articles));
-
-        if (!empty($articles)) {
-            $this->create_posts($articles);
-        } else {
-            $this->logger->log('No relevant articles found');
-        }
-
-        return count($articles);
     }
 
     private function get_sources() {
@@ -87,13 +99,12 @@ class CTS_Scraper {
 
         $this->logger->log('Fetching fresh feed data');
         
-        // Add user agent and increase timeout
         $args = array(
-            'timeout' => 30,
-            'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'timeout' => $this->fetch_timeout,
+            'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'sslverify' => false
         );
         
-        // Use wp_remote_get instead of simplexml_load_file
         $response = wp_remote_get($source, $args);
         
         if (is_wp_error($response)) {
@@ -101,6 +112,12 @@ class CTS_Scraper {
             return array();
         }
         
+        $response_code = wp_remote_retrieve_response_code($response);
+        if ($response_code !== 200) {
+            $this->logger->log("HTTP error fetching feed. Response code: $response_code", 'error');
+            return array();
+        }
+
         $body = wp_remote_retrieve_body($response);
         if (empty($body)) {
             $this->logger->log('Empty response from feed', 'error');
@@ -111,33 +128,63 @@ class CTS_Scraper {
         $xml = simplexml_load_string($body);
         
         if (!$xml) {
-            $this->logger->log('Failed to parse XML feed', 'error');
+            $errors = libxml_get_errors();
+            $error_msg = '';
+            foreach ($errors as $error) {
+                $error_msg .= "Line {$error->line}: {$error->message}\n";
+            }
+            libxml_clear_errors();
+            $this->logger->log('Failed to parse XML feed: ' . $error_msg, 'error');
             return array();
         }
 
         $articles = array();
         $count = 0;
 
-        foreach ($xml->channel->item as $item) {
-            if ($count >= $this->max_articles_per_source) {
-                break;
+        // Handle both RSS and Atom feeds
+        if (isset($xml->channel)) {
+            // RSS feed
+            foreach ($xml->channel->item as $item) {
+                if ($count >= $this->max_articles_per_source) {
+                    break;
+                }
+
+                $article = array(
+                    'title' => (string)$item->title,
+                    'content' => strip_tags((string)($item->description ?? $item->content)),
+                    'link' => (string)$item->link,
+                    'pubDate' => (string)$item->pubDate,
+                    'source_name' => (string)$xml->channel->title,
+                    'guid' => (string)($item->guid ?? $item->link)
+                );
+
+                $articles[] = $article;
+                $count++;
             }
+        } elseif (isset($xml->entry)) {
+            // Atom feed
+            foreach ($xml->entry as $entry) {
+                if ($count >= $this->max_articles_per_source) {
+                    break;
+                }
 
-            $article = array(
-                'title' => (string)$item->title,
-                'content' => strip_tags((string)$item->description),
-                'link' => (string)$item->link,
-                'pubDate' => (string)$item->pubDate,
-                'source_name' => (string)$xml->channel->title,
-                'guid' => (string)$item->guid ?: (string)$item->link
-            );
+                $article = array(
+                    'title' => (string)$entry->title,
+                    'content' => strip_tags((string)($entry->content ?? $entry->summary)),
+                    'link' => (string)$entry->link['href'],
+                    'pubDate' => (string)$entry->published,
+                    'source_name' => (string)$xml->title,
+                    'guid' => (string)($entry->id ?? $entry->link['href'])
+                );
 
-            $articles[] = $article;
-            $count++;
+                $articles[] = $article;
+                $count++;
+            }
         }
 
         if (!empty($articles)) {
             $this->cache->set($cache_key, $articles, 1800); // Cache for 30 minutes
+            $this->logger->log('Successfully loaded and cached ' . count($articles) . ' articles from feed');
         }
 
         return $this->filter_articles($articles, $keywords);
@@ -160,15 +207,12 @@ class CTS_Scraper {
 
     private function create_posts($articles) {
         foreach ($articles as $article) {
-            // Skip if already processed
             if ($this->is_article_processed($article['guid'])) {
                 continue;
             }
 
-            // Generate AI summary
             $summary = $this->ai_service->generate_summary($article['content'], $article['title']);
             
-            // Create post
             $post_id = wp_insert_post(array(
                 'post_title' => sanitize_text_field($article['title']),
                 'post_content' => wp_kses_post($this->format_post_content($article, $summary)),
